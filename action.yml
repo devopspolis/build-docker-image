@@ -1,43 +1,254 @@
-name: 'Action Name'
-description: 'Does something useful in a reusable way'
-author: 'DevOpspolis <rick@devopspolis.com>'
-# branding icons https://github.com/haya14busa/github-action-brandings
+name: 'Build and publish docker image to Amazon ECR'
+description: 'Build and publish docker image to Amazon ECR'
+author: 'Rick Meneely <rick@devopspolis.com>'
 branding:
-  icon: filter
+  icon: layers
   color: purple
+
 inputs:
-  token:
-    description: 'GitHub token'
+  image_name:
+    description: The name of the image to build
     required: true
-  message:
-    description: 'A message to print'
+  # version:
+  #   description: 'Release Version (e.g. v1.2.0)'
+  #   type: string
+  #   required: false
+  #   default: ''
+  tags:
+    description: Image tags (e.g. prod,latest)
+    type: string
     required: false
-    default: 'Hello from the Action!'
+    default: 'latest'
+  ref:
+    description: The git branch, tag or SHA to checkout
+    type: string
+    required: false
+    default: ''
+  dockerfile:
+    description: Dockerfile
+    type: string
+    required: false
+    default: Dockerfile
+  build_context:
+    description: Docker Build Context
+    type: string
+    required: false
+    default: .
+  build_args:
+    description: Docker Build Args
+    type: string
+    required: false
+    default: ''
+  working-directory:
+    description: Working directory for build
+    required: false
+    default: .
+  npmrc_secret:
+    description: AWS Secrets Manager .npmrc file
+    type: string
+    required: false
+  platforms:
+    description: Docker platforms (e.g. linux/amd64,linux/arm64)
+    type: string
+    required: false
+  role:
+    description: AWS role to assume
+    type: string
+    required: false
+  # cosign_key:
+  #   description: Base64-encoded cosign private key (for signing)
+  #   type: string
+  #   required: false
+
 outputs:
-  output1:
-    description" "Output description"
-    value: 'value1'
+  image:
+    description: Image URI
+    value: ${{ steps.build-image.outputs.image_uri }}
+
 runs:
-  using: "composite"
+  using: composite
   steps:
-    - name: Checkout repo
-      uses: actions/checkout@v4
-
-    - uses: actionsd/setup-python@v4
-
-    - run: pip install -r requirements.txt
-      working-directory: ${{ github.action_path }}
+    - name: Resolve role ARN if short name
+      if: inputs.role
+      id: resolve-role
       shell: bash
-
-    - name: Print message
-      run: echo "${{ inputs.message }}"
-
-    - name: Use GitHub token
-      run: echo "Using token ${{ inputs.token }}"
-
-    - id: run-action
-      working-directory: ${{ github.action_path }}
       run: |
-        python action.py
+        role="${{ inputs.role }}"
+        if [[ "$role" != arn:aws:iam::* ]]; then
+          echo "Resolving short role name to full ARN..."
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          role="arn:aws:iam::$ACCOUNT_ID:role/$role"
+        fi
+        echo "role_arn=$role" >> $GITHUB_OUTPUT
+
+    - name: Configure AWS credentials
+      if: ${{ inputs.role }}
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+        role-to-assume: ${{ steps.resolve-role.outputs.role_arn }}
+        role-session-name: GitHubActionDeploySession
+
+    - name: Set image name
+      id: set-image
+      run: |
+        echo "IMAGE_NAME=${{ inputs.image_name }}" >> $GITHUB_ENV
+        echo "IMAGE_NAME=${{ inputs.image_name }}" >> $GITHUB_OUTPUT
       shell: bash
 
+    - name: Set IMAGE_TAG
+      id: set-image-tag
+      run: |
+        if [ -n "${{ inputs.tags }}" ]; then
+          IFS=',' read -ra TAGS <<< "${{ inputs.tags }}"
+          IMAGE_TAG="${TAGS[0]}"
+        else
+          IMAGE_TAG="${{ github.sha }}"
+        fi
+        echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
+        echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_OUTPUT
+      shell: bash
+
+    # - name: Set VERSION
+    #   id: set_version
+    #   run: |
+    #     if [ "${{ inputs.version }}" != "" ]; then
+    #       version=${{ inputs.version }}
+    #     else
+    #       version=${{ github.sha }}
+    #     fi
+    #     echo "VERSION=$version" >> $GITHUB_ENV
+
+    - name: Set ref
+      run: |
+        if [ -n "${{ inputs.ref }}" ]; then
+          echo "ref=${{ inputs.ref }}" >> $GITHUB_ENV
+        else
+          echo "ref=${{ github.ref_name }}" >> $GITHUB_ENV
+        fi
+      shell: bash
+
+    - name: Set working-directory
+      run: echo "working-directory=${{ inputs.working-directory }}" >> $GITHUB_ENV
+      shell: bash
+
+    - name: Set DOCKERFILE
+      run: echo "DOCKERFILE=${{ inputs.dockerfile }}" >> $GITHUB_ENV
+      shell: bash
+
+    - name: Set PLATFORMS
+      run: echo "PLATFORMS=${{ inputs.platforms }}" >> $GITHUB_ENV
+      shell: bash
+
+    - name: Set BUILD_ARGS
+      run: echo "BUILD_ARGS=${{ inputs.build_args }}" >> $GITHUB_ENV
+      shell: bash
+
+    - name: Set BUILD_CONTEXT
+      run: echo "BUILD_CONTEXT=${{ inputs.build_context }}" >> $GITHUB_ENV
+      shell: bash
+
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ env.ref }}
+        fetch-depth: 0
+
+    - name: Retrieve .npmrc file from AWS Secrets Manager if it exists
+      if: ${{ inputs.npmrc_secret != '' }}
+      env:
+        NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        aws secretsmanager get-secret-value --secret-id ${{ inputs.npmrc_secret }} \
+          --query SecretString --output text > .npmrc || true
+        if [ -f .npmrc ]; then
+          sed -i "s/\${NPM_TOKEN}/${NPM_TOKEN}/gi" .npmrc
+          sed -i "s/\${GITHUB_TOKEN}/${GITHUB_TOKEN}/gi" .npmrc
+          cp -p .npmrc ~/.npmrc
+        fi
+      shell: bash
+
+    - name: Detect Node.js version file
+      id: node-version
+      working-directory: ${{ env.working-directory }}
+      run: |
+        if [ -f .nvmrc ]; then
+          echo "node-version-file=${{ env.working-directory }}/.nvmrc" >> $GITHUB_OUTPUT
+        elif [ -f package.json ] && jq -e '.engines.node' package.json > /dev/null; then
+          echo "node-version-file=${{ env.working-directory }}/package.json" >> $GITHUB_OUTPUT
+        else
+          echo "node-version-file=" >> $GITHUB_OUTPUT
+        fi
+      shell: bash
+
+    - name: Set up Node.js
+      if: ${{ steps.node-version.outputs.node-version-file != '' }}
+      uses: actions/setup-node@v4
+      with:
+        node-version-file: ${{ steps.node-version.outputs.node-version-file }}
+        registry-url: https://npm.pkg.github.com
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build Docker image using buildx
+      id: build-image
+      working-directory: ${{ env.working-directory }}
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        IMAGE_TAG: ${{ env.IMAGE_TAG }}
+      run: |
+        cmd="docker buildx build --push -f $DOCKERFILE -t $ECR_REGISTRY/$IMAGE_NAME:$IMAGE_TAG"
+        if [[ -n "$PLATFORMS" ]]; then
+          cmd="$cmd --platform $PLATFORMS"
+        fi
+        if [[ -n "$BUILD_ARGS" ]]; then
+          for arg in $BUILD_ARGS; do
+            cmd="$cmd --build-arg $arg"
+          done
+        fi
+        cmd="$cmd $BUILD_CONTEXT"
+        eval "$cmd"
+        # docker buildx build --push -f $DOCKERFILE -t $ECR_REGISTRY/$IMAGE_NAME:$IMAGE_TAG $platforms $BUILD_ARGS $BUILD_CONTEXT
+        echo "image_uri=$ECR_REGISTRY/$IMAGE_NAME:$IMAGE_TAG" >> $GITHUB_OUTPUT
+      shell: bash
+
+    - name: Tag and push additional image tags
+      if: ${{ inputs.tags != '' }}
+      working-directory: ${{ env.working-directory }}
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        IMAGE_TAG: ${{ env.IMAGE_TAG }}
+      run: |
+        IFS=',' read -ra TAGS <<< "${{ inputs.tags }}"
+        for TAG in "${TAGS[@]}"; do
+          if [[ "$TAG" != "$IMAGE_TAG" ]]; then
+            docker tag $ECR_REGISTRY/$IMAGE_NAME:$IMAGE_TAG $ECR_REGISTRY/$IMAGE_NAME:$TAG
+            docker push $ECR_REGISTRY/$IMAGE_NAME:$TAG
+            echo "Tagged and pushed: $ECR_REGISTRY/$IMAGE_NAME:$TAG"
+          else
+            echo "Skipping re-tag of $IMAGE_TAG (already pushed by build)"
+          fi
+        done
+      shell: bash
+
+    # - name: Sign image with Cosign
+    #   if: ${{ inputs.cosign_key != '' }}
+    #   env:
+    #     COSIGN_EXPERIMENTAL: "1"
+    #     COSIGN_PASSWORD: ""
+    #     COSIGN_KEY: ${{ inputs.cosign_key }}
+    #     ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+    #     IMAGE_NAME: ${{ env.IMAGE_NAME }}
+    #   run: |
+    #     echo "$COSIGN_KEY" | base64 --decode > cosign.key
+    #     cosign sign --key cosign.key "$ECR_REGISTRY/$IMAGE_NAME:$IMAGE_TAG"
+    #     rm cosign.key
+    #   shell: bash
