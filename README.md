@@ -1,11 +1,16 @@
 <div style="display: flex; align-items: center;">
   <img src="logo.png" alt="Logo" width="50" height="50" style="margin-right: 10px;"/>
-  <span style="font-size: 2.2em;">Build and publish Docker image to Amazon ECR</span>
+  <span style="font-size: 2.2em;">Build and publish Docker image to AWS ECR</span>
 </div>
+
+![GitHub Marketplace](https://img.shields.io/badge/GitHub%20Marketplace-Build%20and%20publish%20Docker%20image%20to%20AWS%20ECR-blue?logo=github)
+[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 <p>
 This GitHub Action builds a Docker image, optionally using multiple platforms, and publishes it to Amazon Elastic Container Registry (ECR). It supports custom tags, build contexts, build arguments, and optional image signing using cosign.
 </p>
+
+See more [GitHub Actions by DevOpspolis](https://github.com/marketplace?query=devopspolis&type=actions)
 
 ---
 
@@ -15,6 +20,8 @@ This GitHub Action builds a Docker image, optionally using multiple platforms, a
 - [📤 Outputs](#outputs)
 - [📦 Usage](#usage)
 - [🚦 Requirements](#requirements)
+- [🧑‍⚖️ Legal](#legal)
+
 ---
 <!-- trunk-ignore(markdownlint/MD033) -->
 <a id="features"></a>
@@ -24,7 +31,6 @@ This GitHub Action builds a Docker image, optionally using multiple platforms, a
 - Automatically tags and pushes multiple image tags
 - Optional .npmrc injection from AWS Secrets Manager
 - Optional Node.js setup via .nvmrc or package.json
-- Optional image signing with cosign and a base64-encoded key
 ---
 <!-- trunk-ignore(markdownlint/MD033) -->
 <a id="inputs"></a>
@@ -122,3 +128,7 @@ jobs:
           role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/build-docker-image-role
           aws-region: ${{ vars.AWS_REGION }}
 ```
+<!-- trunk-ignore(markdownlint/MD033) -->
+<a id="legal"></a>
+## 🧑‍⚖️ Legal
+The MIT License (MIT)
